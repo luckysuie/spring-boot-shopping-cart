@@ -1,0 +1,45 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: myacr.azurecr.io/shopping-cart   # CHANGE THIS
+  tag: "latest"                                # pipeline will override
+  pullPolicy: IfNotPresent
+
+# Blue-Green
+color: blue
+
+service:
+  type: LoadBalancer           # use ClusterIP if you use Ingress
+  port: 80
+  targetPort: 8080
+  activeColor: blue            # switch this to green during cutover
+
+# optional if you use imagePullSecret instead of AKS attach-acr
+imagePullSecrets: []
+# imagePullSecrets:
+#   - name: acr-pull
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+env:
+  SPRING_PROFILES_ACTIVE: "default"
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  cpuUtilization: 60
+
+ingress:
+  enabled: false
+  className: nginx
+  host: ""
+  path: /
+

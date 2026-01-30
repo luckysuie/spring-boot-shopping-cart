@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "shopping-cart.fullname" . }}-{{ .Values.color }}
+  labels:
+    app: {{ include "shopping-cart.fullname" . }}
+    color: {{ .Values.color }}
+spec:
+  replicas: {{ .Values.hpa.minReplicas }}
+  selector:
+    matchLabels:
+      app: {{ include "shopping-cart.fullname" . }}
+      color: {{ .Values.color }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "shopping-cart.fullname" . }}
+        color: {{ .Values.color }}
+    spec:
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: shopping-cart
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.targetPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "shopping-cart.fullname" . }}-config
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 60
+            periodSeconds: 20
+

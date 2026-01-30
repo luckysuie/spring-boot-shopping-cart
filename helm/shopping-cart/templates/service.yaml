@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "shopping-cart.fullname" . }}-svc
+  labels:
+    app: {{ include "shopping-cart.fullname" . }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    app: {{ include "shopping-cart.fullname" . }}
+    color: {{ .Values.service.activeColor }}
+
