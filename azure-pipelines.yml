@@ -6,11 +6,11 @@ pool:
 
 variables:
   # ---- Azure / AKS / ACR ----
-  AZ_SERVICE_CONNECTION: az-sc-lucky
+  AZ_SERVICE_CONNECTION: luckyspnconnection
   RESOURCE_GROUP: lucky
-  AKS_NAME: lucky-aks-cluster11
-  ACR_NAME: luckyregistry
-  ACR_LOGIN_SERVER: luckyregistry.azurecr.io
+  AKS_NAME: aks-single-node-demo
+  ACR_NAME: acruniquedemo12345
+  ACR_LOGIN_SERVER: acruniquedemo12345.azurecr.io
 
   # ---- App/Image ----
   IMAGE_REPO: shopcart
