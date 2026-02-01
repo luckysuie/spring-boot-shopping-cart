@@ -1,5 +1,5 @@
 image:
-  repository: luckyregistry.azurecr.io/shopcart
+  repository: acruniquedemo12345.azurecr.io/shopcart
   tag: "v1"
   pullPolicy: IfNotPresent
 
