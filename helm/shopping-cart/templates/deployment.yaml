@@ -17,10 +17,6 @@ spec:
         app: {{ include "shopping-cart.fullname" . }}
         color: {{ .Values.color }}
     spec:
-      {{- if .Values.imagePullSecrets }}
-      imagePullSecrets:
-        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
-      {{- end }}
       containers:
         - name: shopping-cart
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -29,21 +25,19 @@ spec:
             - containerPort: {{ .Values.service.targetPort }}
           envFrom:
             - configMapRef:
-                name: {{ include "shopping-cart.fullname" . }}-config
+                name: {{ include "shopping-cart.fullname" . }}-{{ .Values.color }}-config
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-
           readinessProbe:
             httpGet:
               path: /
               port: {{ .Values.service.targetPort }}
-            initialDelaySeconds: 20
-            periodSeconds: 10
-
+            initialDelaySeconds: 30
+            timeoutSeconds: 3
           livenessProbe:
             httpGet:
               path: /
               port: {{ .Values.service.targetPort }}
-            initialDelaySeconds: 60
-            periodSeconds: 20
+            initialDelaySeconds: 90
+            timeoutSeconds: 3
 
