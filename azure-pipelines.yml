@@ -1,0 +1,188 @@
+trigger:
+- main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # ---- Azure / AKS / ACR ----
+  AZ_SERVICE_CONNECTION: az-sc-lucky
+  RESOURCE_GROUP: lucky
+  AKS_NAME: lucky-aks-cluster11
+  ACR_NAME: luckyregistry
+  ACR_LOGIN_SERVER: luckyregistry.azurecr.io
+
+  # ---- App/Image ----
+  IMAGE_REPO: shopcart
+  IMAGE_TAG: $(Build.BuildId)
+
+  # ---- Helm ----
+  NAMESPACE: shopping-cart
+  CHART_PATH: helm/shopping-cart
+
+  # ---- Blue/Green ----
+  BLUE_RELEASE: shopping-cart-blue
+  GREEN_RELEASE: shopping-cart-green
+
+  # Default nextColor. (We can later auto-detect.)
+  NEXT_COLOR: green
+
+stages:
+
+# ---------------------------
+# Stage 1: Build (Maven)
+# ---------------------------
+- stage: Build
+  displayName: "Build with Maven"
+  jobs:
+  - job: MavenBuild
+    steps:
+    - task: Maven@4
+      displayName: "Maven: clean package (skip tests)"
+      inputs:
+        mavenPomFile: pom.xml
+        goals: "clean package -DskipTests"
+        publishJUnitResults: false
+
+    - publish: $(System.DefaultWorkingDirectory)/target
+      artifact: target
+
+# ---------------------------
+# Stage 2: SonarQube
+# ---------------------------
+- stage: SonarQube
+  displayName: "SonarQube Analysis"
+  dependsOn: Build
+  jobs:
+  - job: Sonar
+    steps:
+    - task: SonarQubePrepare@5
+      displayName: "Prepare SonarQube"
+      inputs:
+        SonarQube: sonar-sc
+        scannerMode: 'Other'
+        extraProperties: |
+          sonar.projectKey=shopping-cart
+          sonar.projectName=Shopping Cart
+          sonar.sources=src/main/java
+          sonar.java.binaries=target/classes
+
+    - task: Maven@4
+      displayName: "Run SonarQube Scan"
+      inputs:
+        mavenPomFile: pom.xml
+        goals: "verify sonar:sonar -DskipTests"
+        publishJUnitResults: false
+
+    - task: SonarQubePublish@5
+      displayName: "Quality Gate"
+      inputs:
+        pollingTimeoutSec: '300'
+
+# ---------------------------
+# Stage 3: Docker Build + Push to ACR
+# ---------------------------
+- stage: BuildPush
+  displayName: "Build & Push Docker Image to ACR"
+  dependsOn: SonarQube
+  jobs:
+  - job: DockerBuildPush
+    steps:
+    - task: AzureCLI@2
+      displayName: "ACR Login"
+      inputs:
+        azureSubscription: $(AZ_SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az acr login --name $(ACR_NAME)
+
+    - script: |
+        echo "Building image..."
+        docker build -t $(ACR_LOGIN_SERVER)/$(IMAGE_REPO):$(IMAGE_TAG) -f docker/Dockerfile .
+        echo "Pushing image..."
+        docker push $(ACR_LOGIN_SERVER)/$(IMAGE_REPO):$(IMAGE_TAG)
+      displayName: "Docker build & push"
+
+# ---------------------------
+# Stage 4: Trivy Scan
+# ---------------------------
+- stage: Trivy
+  displayName: "Trivy Scan (Fail on High/Critical)"
+  dependsOn: BuildPush
+  jobs:
+  - job: TrivyScan
+    steps:
+    - script: |
+        sudo apt-get update
+        sudo apt-get install -y wget gnupg lsb-release
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+        echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+        sudo apt-get update
+        sudo apt-get install -y trivy
+      displayName: "Install Trivy"
+
+    - script: |
+        trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          $(ACR_LOGIN_SERVER)/$(IMAGE_REPO):$(IMAGE_TAG)
+      displayName: "Scan image"
+
+# ---------------------------
+# Stage 5: Deploy GREEN (no service) + Switch Traffic
+# ---------------------------
+- stage: Deploy
+  displayName: "Deploy to AKS with Helm (Blue/Green)"
+  dependsOn: Trivy
+  jobs:
+  - job: HelmDeploy
+    steps:
+    - task: AzureCLI@2
+      displayName: "Get AKS Credentials"
+      inputs:
+        azureSubscription: $(AZ_SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az aks get-credentials -g $(RESOURCE_GROUP) -n $(AKS_NAME) --overwrite-existing
+          kubectl get nodes
+
+    - script: |
+        kubectl get ns $(NAMESPACE) || kubectl create ns $(NAMESPACE)
+      displayName: "Ensure namespace"
+
+    # Ensure BLUE exists (first run). BLUE owns Service (service.create=true).
+    - script: |
+        helm upgrade --install $(BLUE_RELEASE) $(CHART_PATH) -n $(NAMESPACE) \
+          --set color=blue \
+          --set service.create=true \
+          --set service.activeColor=blue \
+          --set image.repository=$(ACR_LOGIN_SERVER)/$(IMAGE_REPO) \
+          --set image.tag=$(IMAGE_TAG)
+      displayName: "Deploy/Upgrade BLUE (Service owner)"
+
+    # Deploy GREEN with the new image tag but DO NOT create service (service.create=false)
+    - script: |
+        helm upgrade --install $(GREEN_RELEASE) $(CHART_PATH) -n $(NAMESPACE) \
+          --set color=green \
+          --set service.create=false \
+          --set image.repository=$(ACR_LOGIN_SERVER)/$(IMAGE_REPO) \
+          --set image.tag=$(IMAGE_TAG)
+      displayName: "Deploy/Upgrade GREEN (no service)"
+
+    # Optional: wait for GREEN pods to be ready
+    - script: |
+        kubectl rollout status deploy/shopping-cart-green -n $(NAMESPACE) --timeout=180s
+        kubectl get pods -n $(NAMESPACE) -o wide
+      displayName: "Wait for GREEN readiness"
+
+    # Switch traffic to GREEN (update selector via BLUE release)
+    - script: |
+        helm upgrade $(BLUE_RELEASE) $(CHART_PATH) -n $(NAMESPACE) --set service.activeColor=green
+        kubectl get endpoints -n $(NAMESPACE) shopping-cart-svc -o wide
+      displayName: "Switch traffic to GREEN"
+
+    # Show HPA status
+    - script: |
+        kubectl get hpa -n $(NAMESPACE)
+      displayName: "Check HPA"
+
